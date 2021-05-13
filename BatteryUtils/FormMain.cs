@@ -40,6 +40,9 @@ namespace BatteryUtils
         private const uint WM_SYSCOMMAND = 0x0112;
         private const int SC_MONITORPOWER = 0xf170;
 
+        private const string start = "start ";
+        private const string stop = "stop ";
+
         [Flags]
         internal enum FILE_ATTRIBUTES : uint
         {
@@ -116,17 +119,35 @@ namespace BatteryUtils
         {
             SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
         }
+        
+        private void updateConfigFile(decimal start, decimal stop)
+        {
+            this.defaultConfigFilePath = this.configFilePath.Text;
+            string content = string.Format("{0}{1}\r\n{2}{3}", FormMain.start, start, FormMain.stop, stop);
+            File.WriteAllText(this.defaultConfigFilePath, content);
+        }
 
         private IntPtr handle = IntPtr.Zero;
         private void applyThreshold_Click(object sender, EventArgs e)
         {
-            decimal start = startThreshold.Value - 1;
+            thresholdExec();
+        }
+        private void thresholdExec()
+        {
+            decimal start = startThreshold.Value;
             decimal stop = stopThreshold.Value;
             stop = stop == 100 ? 0x00 : stop;
+
+            if (stop < start)
+            {
+                MessageBox.Show("start/stop value unavailable!", "error");
+                return;
+            }
             //先执行停止指令
             SetBatteryThresh(handle, stop, DEFAULT_BATTERY_ID, SET_BATTERY_THRESH_STOP);
             //再执行开始指令
             SetBatteryThresh(handle, start, DEFAULT_BATTERY_ID, SET_BATTERY_THRESH_START);
+            updateConfigFile(start, stop);
         }
 
         private static bool SetBatteryThresh(IntPtr handle, decimal value, byte id, uint controlCode)
@@ -144,7 +165,8 @@ namespace BatteryUtils
             Marshal.StructureToPtr(batteryThreshOut, batteryThreshOutPointer, false);
             try
             {
-                return DeviceIoControl(handle, controlCode, batteryThreshSize, batteryThreshPointer, batteryThreshOutSize, batteryThreshOutPointer);
+                return DeviceIoControl(handle, controlCode, batteryThreshSize, batteryThreshPointer, 
+                                        batteryThreshOutSize, batteryThreshOutPointer);
             }
             finally
             {
@@ -153,10 +175,13 @@ namespace BatteryUtils
             }
         }
 
-        private static bool DeviceIoControl(IntPtr handle, uint controlCode, int batteryThreshSize, IntPtr batteryThreshPointer, int batteryThreshOutSize, IntPtr batteryThreshOutPointer)
+        private static bool DeviceIoControl(IntPtr handle, uint controlCode, int batteryThreshSize, 
+                        IntPtr batteryThreshPointer, int batteryThreshOutSize, IntPtr batteryThreshOutPointer)
         {
             uint bytesReturned;
-            bool retval = DeviceIoControl(handle, controlCode, batteryThreshPointer, (uint)batteryThreshSize, batteryThreshOutPointer, (uint)batteryThreshOutSize, out bytesReturned, IntPtr.Zero);
+            bool retval = DeviceIoControl(handle, controlCode, batteryThreshPointer,
+                                            (uint)batteryThreshSize, batteryThreshOutPointer, 
+                                            (uint)batteryThreshOutSize, out bytesReturned, IntPtr.Zero);
             if (!retval)
             {
                 int errorCode = Marshal.GetLastWin32Error();
@@ -171,7 +196,8 @@ namespace BatteryUtils
 
         private void FormMain_Load(object sender, EventArgs e)
         {
-            handle = CreateFile("\\\\.\\IBMPmDrv", FileAccess.ReadWrite, FileShare.ReadWrite, IntPtr.Zero, FileMode.Open, FILE_ATTRIBUTES.Normal, IntPtr.Zero);
+            handle = CreateFile("\\\\.\\IBMPmDrv", FileAccess.ReadWrite, FileShare.ReadWrite,
+                                IntPtr.Zero, FileMode.Open, FILE_ATTRIBUTES.Normal, IntPtr.Zero);
             if (handle == IntPtr.Zero || handle.ToInt32() == -1)
             {
                 int errorCode = Marshal.GetLastWin32Error();
@@ -180,6 +206,48 @@ namespace BatteryUtils
                 else
                     throw new Exception(
                         "SetupDiGetDeviceInterfaceDetail call failed but Win32 didn't catch an error.");
+            }
+
+            if (File.Exists(this.defaultConfigFilePath))
+            {
+                // config file exist then get config value 
+                string[] cxt = File.ReadAllLines(this.defaultConfigFilePath);
+                if (cxt == null)
+                {
+                    // error
+                    return;
+                }
+
+                bool parseConfigFileFailed = false;
+                foreach (string c in cxt)
+                {
+                    try
+                    {
+                        if (c.StartsWith(FormMain.start))
+                        {
+                            decimal _start = decimal.Parse(c.Substring(FormMain.start.Length));
+                            startThreshold.Value = _start;
+                        }
+                        else if (c.StartsWith(FormMain.stop))
+                        {
+                            decimal _stop = decimal.Parse(c.Substring(FormMain.stop.Length));
+                            stopThreshold.Value = _stop;
+                        }
+                        else
+                        {
+                            // other config items.
+                        }
+                    }
+                    catch (Exception ex) {
+                        MessageBox.Show("parse config file failed, passed: " + ex.Message);
+                        parseConfigFileFailed = true;
+                    }
+                }
+                if (!parseConfigFileFailed)
+                {
+                    thresholdExec();
+                    return;
+                }
             }
 
             GET_BATTERY_THRESH_IN batteryThresh = new GET_BATTERY_THRESH_IN();
@@ -194,14 +262,17 @@ namespace BatteryUtils
             Marshal.StructureToPtr(batteryThreshOut, batteryThreshOutPointer, false);
             try
             {
-
-                DeviceIoControl(handle, GET_BATTERY_THRESH_START, batteryThreshSize, batteryThreshPointer, batteryThreshOutSize, batteryThreshOutPointer);
-                GET_BATTERY_THRESH_OUT outInfo = (GET_BATTERY_THRESH_OUT)Marshal.PtrToStructure(batteryThreshOutPointer, typeof(GET_BATTERY_THRESH_OUT));
+                DeviceIoControl(handle, GET_BATTERY_THRESH_START, batteryThreshSize, 
+                                batteryThreshPointer, batteryThreshOutSize, batteryThreshOutPointer);
+                GET_BATTERY_THRESH_OUT outInfo = (GET_BATTERY_THRESH_OUT)Marshal.PtrToStructure(batteryThreshOutPointer, 
+                                                                                        typeof(GET_BATTERY_THRESH_OUT));
                 decimal startValue = outInfo.Value + 1;
                 startThreshold.Value = startValue >= 100 ? 30 : startValue;
 
-                DeviceIoControl(handle, GET_BATTERY_THRESH_STOP, batteryThreshSize, batteryThreshPointer, batteryThreshOutSize, batteryThreshOutPointer);
-                outInfo = (GET_BATTERY_THRESH_OUT)Marshal.PtrToStructure(batteryThreshOutPointer, typeof(GET_BATTERY_THRESH_OUT));
+                DeviceIoControl(handle, GET_BATTERY_THRESH_STOP, batteryThreshSize, 
+                                batteryThreshPointer, batteryThreshOutSize, batteryThreshOutPointer);
+                outInfo = (GET_BATTERY_THRESH_OUT)Marshal.PtrToStructure(batteryThreshOutPointer,
+                                                                            typeof(GET_BATTERY_THRESH_OUT));
                 byte stopValue = outInfo.Value;
                 stopThreshold.Value = stopValue == 0x00 || stopValue >= 100 ? 100 : stopValue;
             }

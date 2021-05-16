@@ -4,7 +4,8 @@ forked from BatteryUtils.
 我增加了配置文件路径设置、记录配置值、启动自动设置等功能以方便使用.
 更多原项目详细信息见以下.
 
-===================================================================
+原项目说明：
+============================================================
 Thinkpad battery charge threshold utils
 
 Exposes ACPI interface for battery controls.
